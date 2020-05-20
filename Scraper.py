@@ -9,11 +9,16 @@ from utils import *
 from Course import Course
 
 WS = None
-CWD = "/Users/adam/Google Drive/MIT/Classes/Scraper/output"
+
+conf = {}
+if os.path.exists("config.jsn"):
+    conf = read_json("config.jsn")
+
+CWD = conf.get("path", "")
 
 
 class Scraper(object):
-    def __init__(self, WS = WS, basedir=CWD, max_downloads = 5, poolsize = 3, loglevel=logging.INFO, cache=True, dup_files=False): 
+    def __init__(self, WS = None, basedir=CWD, max_downloads = 5, poolsize = 3, loglevel=logging.INFO, cache=True, dup_files=False): 
         self.basedir = basedir
         os.makedirs(self.basedir, exist_ok=True)
         self.log = config_logger(loglevel, basedir, repr(self))
