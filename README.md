@@ -10,4 +10,4 @@ pip install ScrapeCanvas
 
 Usage:
 
-python -m ScrapveCanvas
+python -m ScrapeCanvas
