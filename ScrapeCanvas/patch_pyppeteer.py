@@ -1,3 +1,6 @@
+# Source: https://github.com/kiwi0fruit/pyppdf/blob/master/pyppdf/patch_pyppeteer/patch_pyppeteer.py
+# Author: Peter Zagubisalo (@ kiwi0fruit)
+
 """
 # Usage (in this particular order):
 
