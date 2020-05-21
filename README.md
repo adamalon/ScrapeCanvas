@@ -1,4 +1,4 @@
-# CanvasScraper
+# ScrapeCanvas
 Python utility to scrape Canvas files.
 
 
