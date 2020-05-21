@@ -1,12 +1,12 @@
 import asyncio
-from utils import *
+import pyppeteer.errors
+from .utils import *
 
 class Course(object):
     def __init__(self, URL, context):
         self.URL = URL
         self.context = context
         self.log = context.log
-        self.tree_locs = dict()
         self.no_files_tab = None
         
     def db_cleanup_all(self):
@@ -41,9 +41,16 @@ class Course(object):
         await self.download_all_modules()
         await self.download_all_assignments()
         await self.download_all_announcements()
+        #await self.download_study_net()
+        await self.page.close()
+        self.log.info("Finished scraping %s" % self.title)
+
+
+    async def go2(self):
+        await self.init()
         await self.download_study_net()
         await self.page.close()
-        self.log.info("Finished %s" % self.title)
+        self.log.info("Finished Study.Net for %s" % self.title)
 
 
     async def init(self):
@@ -91,45 +98,50 @@ class Course(object):
 
 
     async def download_tree(self, tree_name, lnk_gen):
-        await self.page.goto(self.URL + "/" + tree_name)
-        
-        if self.page.url == self.URL and tree_name != "modules": # was redirected back to main -- could not find tab (modules is the only exception)
-            self.log.debug("Could not locate %s tab for course %s" % (tree_name, self.title))
-            lnk_gen.close()
-            return
-
-        self.log.debug("Starting %s for course %s" % (tree_name, self.title))
-        
         tree_dir = pathjoin(self.dir, tree_name)
-        os.makedirs(tree_dir, exist_ok=True)
-        
         tree_info_path = pathjoin(tree_dir, "tree_info.jsn")
 
+        if os.path.exists(tree_info_path):
+            self.log.debug("Resuming %s for course %s" % (tree_name, self.title))
+        else:
+            await self.page.goto(self.URL + "/" + tree_name)
+            
+            if self.page.url == self.URL and tree_name != "modules": # was redirected back to main -- could not find tab (modules is the only exception)
+                self.log.debug("Could not locate %s tab for course %s" % (tree_name, self.title))
+                lnk_gen.close()
+                return
+
+            self.log.debug("Starting %s for course %s" % (tree_name, self.title))    
+            os.makedirs(tree_dir, exist_ok=True)
+        
         self.db_cleanup(tree_name)
 
         if os.path.exists(tree_info_path):
             tree_info = read_json(tree_info_path)
+            lnk_gen.close()
         else:
             tree_info = {}
-        
-        lnks = await lnk_gen
-        for i, lnk in enumerate(lnks):
-            if lnk["href"] in tree_info:
-                continue
-            entry = {}
-            entry["done"] = False
-            entry["name"] = "%d - %s"%(i, lnk['textContent'])
-            entry["href"] = lnk["href"]
-            entry["textContent"] = lnk["textContent"]
-            tree_info[entry["href"]] = entry # index by href
-
-        update_json(tree_info_path, tree_info)
+            lnks = await lnk_gen
+            for i, lnk in enumerate(lnks):
+                if lnk["href"] in tree_info:
+                    continue
+                entry = {}
+                entry["done"] = False
+                entry["name"] = "%d - %s"%(i, lnk['textContent'])
+                entry["href"] = lnk["href"]
+                entry["textContent"] = lnk["textContent"]
+                tree_info[entry["href"]] = entry # index by href
+            update_json(tree_info_path, tree_info)
 
         for leaf in tree_info.values():
             if leaf["done"]:
                 continue
-            await self.download_leaf(leaf, tree_dir, tree_name)
-            leaf["done"] = True
+            try:
+                await self.download_leaf(leaf, tree_dir, tree_name)
+                leaf["done"] = True
+            except pyppeteer.errors.TimeoutError:
+                self.log.error("Error downloading %s"%leaf["href"])
+                continue 
             update_json(tree_info_path, tree_info)
 
         self.log.debug("Finished %s for %s"%(tree_name, self.title))
@@ -203,22 +215,23 @@ class Course(object):
 
         self.no_files_tab = False
         os.makedirs(files_dir, exist_ok=True)
-        
-        #await self.page.waitForSelector('[class="grid-row ef-quota-usage"]')
-        await self.page.waitForSelector('[class="ef-item-row"]')
-        await self.page.click('[class="ef-item-row"]')
-        await self.page.keyboard.down('Control')
-        await self.page.keyboard.press('KeyA')
-        await self.page.keyboard.up('Control')
-        button = await self.page.querySelector('[class="ui-button btn-download"]')
+        async with self.context.targetCreationLock:
+            await self.page.bringToFront()
+            #await self.page.waitForSelector('[class="grid-row ef-quota-usage"]')
+            await self.page.waitForSelector('[class="ef-item-row"]')
+            await self.page.click('[class="ef-item-row"]')
+            await self.page.keyboard.down('Control')
+            await self.page.keyboard.press('KeyA')
+            await self.page.keyboard.up('Control')
+            button = await self.page.querySelector('[class="ui-button btn-download"]')
 
-        await set_page_download_folder(self.page, files_dir)
-        await self.context.await_downloads_cap()
-        
-        await button.click()
-        self.log.debug("Initiating zip for course %s" % self.title)
-        await self.page.waitForSelector('[class="alert alert-info"]')
-        self.log.debug("Prepping zip for course %s" % self.title)
+            await set_page_download_folder(self.page, files_dir)
+            await self.context.await_downloads_cap()
+            
+            await button.click()
+            self.log.debug("Initiating zip for course %s" % self.title)
+            await self.page.waitForSelector('[class="alert alert-info"]')
+            self.log.debug("Prepping zip for course %s" % self.title)
         while await self.page.querySelectorAll('[class="alert alert-info"]'):        
             await asyncio.sleep(1)
         self.log.debug("Downloading zip for course %s" % self.title)
@@ -247,7 +260,8 @@ class Course(object):
         os.makedirs(study_dir, exist_ok=True)
 
         # Study.Net does not seem to handle multisessions well, so we lock here
-        async with self.context.studyNetLock:       
+        async with self.context.targetCreationLock:
+            await self.page.bringToFront()
             for i in range(10):
                 if any([f.url == "https://www.study.net/api/lti/default_vs.asp" for f in self.page.frames]):
                     break
@@ -285,18 +299,22 @@ class Course(object):
             else:
                 raise TimeoutError("Unknown Study.Net error for %s" % self.title)
 
+            await frame.waitForSelector('[name="chk_all"]')
+            await asyncio.sleep(2) # just to be safe?
             await frame.click('[name="chk_all"]')
-            self.log.debug("Study.Net files located succesfully for %s" % self.title)
+            self.log.debug("Study.Net 'check all' clicked succesfully for %s" % self.title)
 
             # WARNING: RACE CONDITION
             # If between creating the listener and  clicking the button some other
             # 'targetcreated' event happens, we will get the wrong page.
             # The targetCreationLock mutex promises no other pages are created concurrently.
-            async with self.context.targetCreationLock:
-                result_page_future = asyncio.get_event_loop().create_future()
-                self.page.browser.once('targetcreated', lambda target: result_page_future.set_result(target))
-                await frame.click('[id="btnSubmit"]')
-                popup = await (await result_page_future).page()
+#            async with self.context.targetCreationLock:
+            result_page_future = asyncio.get_event_loop().create_future()
+            self.page.browser.once('targetcreated', lambda target: result_page_future.set_result(target))
+            await frame.click('[id="btnSubmit"]')
+            self.log.debug("Study.Net download button clicked for %s" % self.title)
+
+            popup = await (await result_page_future).page()
             
             await set_page_download_folder(popup, study_dir)
             await popup.waitForSelector('[href="down_zip.asp"]', timeout=60000) # wait up to 1 minute

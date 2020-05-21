@@ -1,31 +1,25 @@
 import asyncio
-import patch_pyppeteer
-patch_pyppeteer.patch_pyppeteer()
+from .patch_pyppeteer import patch_pyppeteer
+patch_pyppeteer()
 from pyppeteer import launcher, launch
 from pyppeteer.errors import PageError
 import os
 
-from utils import *
-from Course import Course
-
-WS = None
-
-conf = {}
-if os.path.exists("config.jsn"):
-    conf = read_json("config.jsn")
-
-CWD = conf.get("path", "")
-
+from .utils import *
+from .Course import Course
 
 class Scraper(object):
-    def __init__(self, WS = None, basedir=CWD, max_downloads = 5, poolsize = 3, loglevel=logging.INFO, cache=True, dup_files=False): 
-        self.basedir = basedir
+    def __init__(self, WS = None, basedir=None, max_downloads = 5, poolsize = 3, loglevel=logging.INFO, cache=False, dup_files=True, base_url="https://canvas.mit.edu"): 
+        if basedir is None:
+            basedir = os.getcwd()
+        self.basedir = basedir = pathjoin(basedir, "output")
         os.makedirs(self.basedir, exist_ok=True)
         self.log = config_logger(loglevel, basedir, repr(self))
         self.WS = WS
         self.max_downloads = max_downloads
         self.poolsize = poolsize
         self.dup_files = dup_files
+        self.base_url = base_url
 
         self.do_cache = cache
         self.cache_path = pathjoin(basedir, "cache.jsn")
@@ -50,8 +44,10 @@ class Scraper(object):
 
     async def _go(self, amount=None, *course_nums):
         await self.init()
-        assert(prompt_y_n("finished_login"))
+        await self.handle_login()
+        #assert(prompt_y_n("finished_login"))
         await self.scrape_all_courses(amount, *course_nums)
+        await self.scrape_all_studynet(amount, *course_nums)
 
     def go(self, amount=None, *course_nums):
         return go(self._go(amount, *course_nums))
@@ -69,15 +65,24 @@ class Scraper(object):
             self.browser = browser
 
         self.log.info(self.WS)
+
+    async def handle_login(self):
         pages = await self.browser.pages()
-        await pages[0].goto("https://canvas.mit.edu")
+        p = pages[0]
+        await p.goto(self.base_url + "/courses")
+        assert(prompt_y_n("Please login in the Chromium window. Finished_login"))
+
+
+
+        
 
     async def scrape_all_courses(self, amount=None, *course_nums):
         self.downloads_cleanup()
         async with self.targetCreationLock:
             page = await self.browser.newPage()
         # open courses page
-        await page.goto("https://canvas.mit.edu/courses")
+        
+        await page.goto(self.base_url + "/courses")
 
         # get all courses links
         
@@ -125,8 +130,47 @@ class Scraper(object):
                 self.log.warning("DB inconsistencies fixed - restarting failed tasks")
                 await self.scrape_all_courses()
         else:
-            self.log.info("Finished scraping all canvas successfully")
+            self.log.info("Finished scraping all canvas files successfully")
             return True
+
+
+    async def scrape_all_studynet(self, amount=None, *course_nums):
+        page = (await self.browser.pages())[0]
+        await page.goto(self.base_url + "/courses")
+
+        # get all courses links
+        links = set([l["href"] for l in await get_all_links(page) if "/courses/" in l["href"]])
+
+        if course_nums:    
+            links = [l for l in links if any(str(num) in l for num in course_nums)]
+
+        links = sorted(links)
+        
+        # create scraping tasks
+        courses = [Course(link, self) for link in links][:amount]
+        tasks = [c.go2() for c in courses]
+
+        for link in links[:amount]:
+            while True:
+                course = Course(link, self)
+                try:
+                    await course.go2()
+                except Exception as e:
+                    self.log.error("Error downloading Study.Net for %s, retrying"%link)
+                    self.log.error(e)
+
+                else:
+                    break
+            
+        # await for lingering downloads
+        i = 5
+        while(self.count_downloads() > 0):
+            self.log.info("Waiting for %d downloads to finish, sleeping for %ds"%(self.count_downloads(), i))
+            await asyncio.sleep(i)
+            i = min(60, i*2)
+
+        self.log.info("Finished scraping all Study.Net successfully")
+        return True
    
     def get_downloads(self):
         return [str(x) for x in Path(self.basedir).rglob("*.crdownload")]
@@ -170,7 +214,7 @@ class Scraper(object):
         except PageError: # this means we started downloading
             return
 
-
-        
-        
-
+def run_scrape(**conf):
+    s = Scraper(**conf)
+    s.go()
+    return s
