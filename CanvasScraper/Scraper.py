@@ -9,7 +9,7 @@ from .utils import *
 from .Course import Course
 
 class Scraper(object):
-    def __init__(self, WS = None, basedir=None, max_downloads = 5, poolsize = 3, loglevel=logging.INFO, cache=False, dup_files=True, base_url="https://canvas.mit.edu"): 
+    def __init__(self, WS = None, basedir=None, max_downloads = 5, poolsize = 5, loglevel=logging.INFO, cache=False, dup_files=True, base_url="https://canvas.mit.edu"): 
         if basedir is None:
             basedir = os.getcwd()
         self.basedir = basedir = pathjoin(basedir, "output")
