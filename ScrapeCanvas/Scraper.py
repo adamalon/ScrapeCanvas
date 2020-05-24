@@ -148,7 +148,7 @@ class Scraper(object):
         
         # create scraping tasks
         courses = [Course(link, self) for link in links][:amount]
-        tasks = [c.go2() for c in courses]
+        #tasks = [c.go2() for c in courses]
 
         for link in links[:amount]:
             while True:
