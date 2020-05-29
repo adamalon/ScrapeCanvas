@@ -14,6 +14,8 @@ class Scraper(object):
             basedir = os.getcwd()
         self.basedir = basedir = pathjoin(basedir, "output")
         os.makedirs(self.basedir, exist_ok=True)
+        print("Outputting files to:")
+        print(self.basedir)
         self.log = config_logger(loglevel, basedir, repr(self))
         self.WS = WS
         self.max_downloads = max_downloads
